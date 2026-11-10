@@ -1,0 +1,183 @@
+// ==========================================
+// WEMAD ENTERPRISE & NOYAU SOUVERAIN Z^Z
+// Infrastructure Haute Sécurité, Paywall 200$/mois & Stockage Illimité
+// ==========================================
+
+const express = require('express');
+const crypto = require('crypto');
+const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const app = express();
+
+app.use(express.json());
+
+// 1. BASE DE DONNÉES SÉCURISÉE DES ABONNÉS WEMAD / Z^Z
+const wemadeSecureDatabase = new Map();
+
+// Clé maître entreprise (Accès Administrateur Gratuit et Illimité pour le Fondateur)
+const masterKeyHash = crypto.createHash('sha256').update("wemad_zz_master_key_2026").digest('hex');
+wemadeSecureDatabase.set(masterKeyHash, {
+  company: "WEMAD (Fondateur)",
+  status: 'ACTIVE',
+  plan: 'WEMAD_ENTERPRISE_FOUNDER_UNLIMITED',
+  computeCreditsUSD: 999999.00,
+  createdAt: Date.now()
+});
+
+// 2. PARE-FEU ANTI-DDOS & RATE LIMITING
+const requestTracker = new Map();
+function rateLimiter(req, res, next) {
+  const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+  const now = Date.now();
+  const windowTime = 60 * 1000;
+  const maxRequests = 60;
+
+  if (!requestTracker.has(ip)) {
+    requestTracker.set(ip, { count: 1, startTime: now });
+  } else {
+    const data = requestTracker.get(ip);
+    if (now - data.startTime < windowTime) {
+      data.count++;
+      if (data.count > maxRequests) {
+        return res.status(429).json({
+          company: "WEMAD",
+          error: "Trop de requêtes. Accès temporairement bloqué par le pare-feu WEMAD Z^Z.",
+          code: "TOO_MANY_REQUESTS"
+        });
+      }
+    } else {
+      requestTracker.set(ip, { count: 1, startTime: now });
+    }
+  }
+  next();
+}
+
+app.use(rateLimiter);
+
+// 3. MIDDLEWARE DE SÉCURITÉ ZERO-TRUST (Vérification des 200$/mois ou Bypass Admin)
+function verifyWemadZZSecurity(req, res, next) {
+  const rawApiKey = req.headers['x-zz-secure-key'] || req.headers['x-wemad-api-key'];
+
+  if (!rawApiKey) {
+    return res.status(401).json({
+      company: "WEMAD",
+      infrastructure: "ZALAPUISSANCE_Z",
+      error: "Accès refusé. Clé d'API WEMAD Z^Z manquante.",
+      code: "UNAUTHORIZED_ACCESS"
+    });
+  }
+
+  const incomingKeyHash = crypto.createHash('sha256').update(rawApiKey).digest('hex');
+  const subscriber = wemadeSecureDatabase.get(incomingKeyHash);
+
+  // Si la clé n'existe pas ou n'est pas active -> Code 402 Payment Required
+  if (!subscriber || subscriber.status !== 'ACTIVE') {
+    return res.status(402).json({
+      company: "WEMAD",
+      infrastructure: "ZALAPUISSANCE_Z",
+      error: "Paiement requis. Abonnement exclusif requis à 200 $/mois pour accéder au supercalculateur WEMAD Z^Z.",
+      code: "PAYMENT_REQUIRED",
+      price_usd: 200.00,
+      checkout_url: "https://z.wemad.com/billing"
+    });
+  }
+
+  if (subscriber.computeCreditsUSD <= 0) {
+    return res.status(402).json({
+      company: "WEMAD",
+      infrastructure: "ZALAPUISSANCE_Z",
+      error: "Crédits de calcul épuisés. Veuillez renouveler votre abonnement à 200 $.",
+      code: "INSUFFICIENT_CREDITS"
+    });
+  }
+
+  req.subscriber = subscriber;
+  next();
+}
+
+// 4. CONFIGURATION DU STOCKAGE VIDÉO ILLIMITÉ (0% de saturation RAM VPS)
+const s3Config = new S3Client({
+  endpoint: process.env.SPACES_ENDPOINT || "https://fra1.digitaloceanspaces.com",
+  region: "us-east-1",
+  credentials: {
+    accessKeyId: process.env.SPACES_KEY || "VOTRE_SPACES_KEY",
+    secretAccessKey: process.env.SPACES_SECRET || "VOTRE_SPACES_SECRET"
+  }
+});
+
+// Endpoint : Génération d'une URL d'upload direct pour stocker n'importe quelle vidéo dans le Cloud
+app.post('/api/v1/video/generate-upload-url', verifyWemadZZSecurity, async (req, res) => {
+  try {
+    const { fileName, fileType } = req.body;
+    const fileKey = `wemad_vault/videos/${Date.now()}_${fileName}`;
+
+    const command = new PutObjectCommand({
+      Bucket: process.env.SPACES_BUCKET || 'wemad-zz-global-storage',
+      Key: fileKey,
+      ContentType: fileType,
+      ACL: 'private'
+    });
+
+    const uploadUrl = await getSignedUrl(s3Config, command, { expiresIn: 900 });
+
+    res.status(200).json({
+      status: "SUCCESS",
+      company: "WEMAD",
+      core: "ZALAPUISSANCE_Z",
+      message: "Lien de stockage vidéo illimité généré avec succès.",
+      upload_url: uploadUrl,
+      file_key: fileKey
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Erreur d'allocation du stockage cloud." });
+  }
+});
+
+// 5. WEBHOOK DE PAIEMENT UNIVERSEL (Activation automatique des abonnements 200$)
+app.post('/api/v1/webhook/payment-global', async (req, res) => {
+  const { eventType, rawKeyToActivate, amountPaidUSD, paymentGateway, clientCompany } = req.body;
+
+  if (eventType === 'PAYMENT_SUCCESS' && rawKeyToActivate) {
+    const newKeyHash = crypto.createHash('sha256').update(rawKeyToActivate).digest('hex');
+    const creditAmount = amountPaidUSD || 200.00;
+    
+    wemadeSecureDatabase.set(newKeyHash, {
+      company: clientCompany || "Client WEMAD Z^Z",
+      status: 'ACTIVE',
+      plan: 'GLOBAL_PRO_COMPUTE_200USD',
+      computeCreditsUSD: creditAmount,
+      gatewayUsed: paymentGateway || 'PAYMENT_GATEWAY',
+      activatedAt: Date.now()
+    });
+
+    console.log(`[WEMAD Z^Z] Abonnement 200$/mois activé via ${paymentGateway} pour ${clientCompany || 'Client'}`);
+    return res.status(200).json({ 
+      status: "SUCCESS", 
+      company: "WEMAD",
+      message: "Accès au noyau souverain Z^Z déverrouillé pour 200$." 
+    });
+  }
+
+  return res.status(400).json({ status: "FAILED", error: "Échec de validation du paiement." });
+});
+
+// 6. POINT D'ENTRÉE PROTÉGÉ : CALCULS SOUVERAINS WEMAD Z^Z
+app.post('/api/v1/compute-core', verifyWemadZZSecurity, (req, res) => {
+  // Décrémentation minime des crédits (sauf pour le fondateur)
+  if (req.subscriber.plan !== 'WEMAD_ENTERPRISE_FOUNDER_UNLIMITED') {
+    req.subscriber.computeCreditsUSD -= 0.50;
+  }
+
+  res.status(200).json({
+    status: "SECURE_SUCCESS",
+    company: "WEMAD",
+    core: "ZALAPUISSANCE_Z (Z^Z)",
+    message: "Calculs et mémoire exécutés dans le coffre-fort souverain WEMAD.",
+    remaining_credits_usd: req.subscriber.computeCreditsUSD,
+    active_gpu_nodes: "WEMAD-Dedicated-Cluster"
+  });
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`[WEMAD Z^Z] Noyau souverain actif et sécurisé sur le port ${PORT}`));
